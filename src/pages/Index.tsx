@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import QRCode from 'react-qr-code';
 import { Download, QrCode, Settings, Palette, Ruler, Sparkles, Shield, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -21,8 +21,12 @@ import LoginForm from '@/components/LoginForm';
 import SignUpForm from '@/components/SignUpForm';
 import CookieNotice from '@/components/CookieNotice';
 
-const Index = () => {
-  const [url, setUrl] = useState('');
+interface IndexProps {
+  initialUrl?: string; // Allow passing initial URL as prop
+}
+
+const Index: React.FC<IndexProps> = ({ initialUrl = '' }) => {
+  const [url, setUrl] = useState(initialUrl);
   const [qrSize, setQrSize] = useState([256]);
   const [fgColor, setFgColor] = useState('#000000');
   const [bgColor, setBgColor] = useState('#ffffff');
@@ -35,6 +39,13 @@ const Index = () => {
   const qrRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
+  // Update URL when initialUrl prop changes
+  useEffect(() => {
+    if (initialUrl && initialUrl !== url) {
+      setUrl(initialUrl);
+    }
+  }, [initialUrl]);
+
   // Function to truncate URL if it's too long for QR code
   const getTruncatedUrl = (inputUrl: string, maxLength: number = 2000) => {
     if (inputUrl.length <= maxLength) {
@@ -43,7 +54,8 @@ const Index = () => {
     return inputUrl.substring(0, maxLength) + '...';
   };
 
-  const downloadQRCode = () => {
+  // Enhanced download function with multiple format support
+  const downloadQRCode = async (format: 'png' | 'svg' | 'jpeg' = 'png') => {
     if (!url) {
       toast({
         title: "No URL provided",
@@ -55,106 +67,119 @@ const Index = () => {
     
     setIsGenerating(true);
     
-    // Small delay to show loading animation
-    setTimeout(() => {
+    try {
       const svg = qrRef.current?.querySelector('svg');
       if (!svg) {
-        setIsGenerating(false);
+        throw new Error('QR code not found');
+      }
+
+      if (format === 'svg') {
+        // Download as SVG
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+        const downloadUrl = URL.createObjectURL(svgBlob);
+        
+        const downloadLink = document.createElement('a');
+        downloadLink.download = `qr-code-${Date.now()}.svg`;
+        downloadLink.href = downloadUrl;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(downloadUrl);
+        
+        setDownloaded(true);
+        setTimeout(() => setDownloaded(false), 3000);
+        
         toast({
-          title: "Download failed",
-          description: "Could not find QR code to download",
-          variant: "destructive",
+          title: "Download successful",
+          description: "QR code has been downloaded as SVG",
         });
+        setIsGenerating(false);
         return;
       }
 
-      try {
-        // Create a canvas to convert SVG to PNG
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          setIsGenerating(false);
-          toast({
-            title: "Download failed",
-            description: "Canvas not supported in your browser",
-            variant: "destructive",
-          });
-          return;
-        }
+      // For PNG and JPEG formats
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Canvas not supported in your browser');
+      }
 
-        const scaleFactor = 2; // For higher quality
-        canvas.width = qrSize[0] * scaleFactor;
-        canvas.height = qrSize[0] * scaleFactor;
+      const scaleFactor = 3; // Higher quality
+      canvas.width = qrSize[0] * scaleFactor;
+      canvas.height = qrSize[0] * scaleFactor;
 
-        // Set background color
-        ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Set background color
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Convert SVG to image
-        const svgData = new XMLSerializer().serializeToString(svg);
-        const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-        const svgUrl = URL.createObjectURL(svgBlob);
+      // Convert SVG to image
+      const svgData = new XMLSerializer().serializeToString(svg);
+      const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+      const svgUrl = URL.createObjectURL(svgBlob);
 
-        const img = new Image();
+      const img = new Image();
+      
+      await new Promise((resolve, reject) => {
         img.onload = () => {
-          // Draw the image on canvas
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          
-          // Create download link
-          canvas.toBlob((blob) => {
-            if (blob) {
-              const downloadUrl = URL.createObjectURL(blob);
-              const downloadLink = document.createElement('a');
-              downloadLink.download = `qr-code-${Date.now()}.png`;
-              downloadLink.href = downloadUrl;
-              document.body.appendChild(downloadLink);
-              downloadLink.click();
-              document.body.removeChild(downloadLink);
-              
-              // Cleanup
-              URL.revokeObjectURL(downloadUrl);
-              
-              setDownloaded(true);
-              setTimeout(() => setDownloaded(false), 3000);
-              
-              toast({
-                title: "Download successful",
-                description: "QR code has been downloaded as PNG",
-              });
-            } else {
-              toast({
-                title: "Download failed",
-                description: "Could not create image file",
-                variant: "destructive",
-              });
-            }
-          }, 'image/png', 1.0);
-          
-          // Cleanup
-          URL.revokeObjectURL(svgUrl);
-          setIsGenerating(false);
+          try {
+            // Draw the image on canvas
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            
+            // Create download link
+            const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+            const quality = format === 'jpeg' ? 0.95 : 1.0;
+            
+            canvas.toBlob((blob) => {
+              if (blob) {
+                const downloadUrl = URL.createObjectURL(blob);
+                const downloadLink = document.createElement('a');
+                downloadLink.download = `qr-code-${Date.now()}.${format}`;
+                downloadLink.href = downloadUrl;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+                
+                // Cleanup
+                URL.revokeObjectURL(downloadUrl);
+                
+                setDownloaded(true);
+                setTimeout(() => setDownloaded(false), 3000);
+                
+                toast({
+                  title: "Download successful",
+                  description: `QR code has been downloaded as ${format.toUpperCase()}`,
+                });
+              } else {
+                throw new Error('Could not create image file');
+              }
+              resolve(true);
+            }, mimeType, quality);
+          } catch (error) {
+            reject(error);
+          }
         };
         
         img.onerror = () => {
-          URL.revokeObjectURL(svgUrl);
-          setIsGenerating(false);
-          toast({
-            title: "Download failed",
-            description: "Could not process QR code image",
-            variant: "destructive",
-          });
+          reject(new Error('Could not process QR code image'));
         };
 
         img.src = svgUrl;
-      } catch (error) {
-        setIsGenerating(false);
-        toast({
-          title: "Download failed",
-          description: "An error occurred while downloading",
-          variant: "destructive",
-        });
-      }
-    }, 500);
+      });
+
+      // Cleanup
+      URL.revokeObjectURL(svgUrl);
+      
+    } catch (error) {
+      console.error('Download error:', error);
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : "An error occurred while downloading",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const copyToClipboard = async () => {
@@ -172,6 +197,26 @@ const Index = () => {
       });
     }
   };
+
+  // Function to handle URL from external sources (like URL parameters)
+  const handleExternalUrl = (externalUrl: string) => {
+    if (externalUrl && externalUrl.trim()) {
+      setUrl(externalUrl.trim());
+      toast({
+        title: "URL loaded",
+        description: "QR code generated from provided URL",
+      });
+    }
+  };
+
+  // Check for URL parameters on component mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlParam = urlParams.get('url');
+    if (urlParam) {
+      handleExternalUrl(decodeURIComponent(urlParam));
+    }
+  }, []);
 
   return (
     <div className={`min-h-screen relative overflow-hidden ${isDarkMode ? 'dark' : ''}`}>
@@ -240,7 +285,7 @@ const Index = () => {
               </div>
               <div className={`flex items-center gap-3 p-4 ${isDarkMode ? 'bg-black/20' : 'bg-white/20'} backdrop-blur-sm rounded-xl border ${isDarkMode ? 'border-green-300/30' : 'border-white/30'}`}>
                 <Shield className={`w-6 h-6 ${isDarkMode ? 'text-green-400' : 'text-violet-600'}`} />
-                <span className={`${isDarkMode ? 'text-green-300' : 'text-gray-800'} font-medium`}>URL Validation</span>
+                <span className={`${isDarkMode ? 'text-green-300' : 'text-gray-800'} font-medium`}>Multiple Formats</span>
               </div>
             </div>
           </div>
@@ -300,12 +345,36 @@ const Index = () => {
                           </div>
                         )}
 
-                        <div className="flex gap-4 items-center">
-                          <AnimatedDownloadButton 
-                            onClick={downloadQRCode}
-                            disabled={isGenerating || !url}
-                            downloaded={downloaded}
-                          />
+                        {/* Download Options */}
+                        <div className="flex flex-col sm:flex-row gap-4 items-center">
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={() => downloadQRCode('png')}
+                              disabled={isGenerating || !url}
+                              className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
+                            >
+                              <Download className="mr-2 size-4" />
+                              PNG
+                            </Button>
+                            <Button
+                              onClick={() => downloadQRCode('jpeg')}
+                              disabled={isGenerating || !url}
+                              variant="outline"
+                              className="px-6 py-3 rounded-xl font-bold shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
+                            >
+                              <Download className="mr-2 size-4" />
+                              JPEG
+                            </Button>
+                            <Button
+                              onClick={() => downloadQRCode('svg')}
+                              disabled={isGenerating || !url}
+                              variant="outline"
+                              className="px-6 py-3 rounded-xl font-bold shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
+                            >
+                              <Download className="mr-2 size-4" />
+                              SVG
+                            </Button>
+                          </div>
                           
                           <ShareButton url={url} onCopy={copyToClipboard} />
                         </div>
@@ -427,8 +496,9 @@ const Index = () => {
                         </h3>
                         <div className={`space-y-2 text-sm ${isDarkMode ? 'text-green-400' : 'text-gray-600'}`}>
                           <p><span className="font-medium">Size:</span> {qrSize[0]}px × {qrSize[0]}px</p>
-                          <p><span className="font-medium">Format:</span> PNG</p>
+                          <p><span className="font-medium">Formats:</span> PNG, JPEG, SVG</p>
                           <p><span className="font-medium">URL:</span> <span className="break-all">{url}</span></p>
+                          <p><span className="font-medium">Characters:</span> {url.length}</p>
                         </div>
                       </div>
                     )}
@@ -468,7 +538,7 @@ const Index = () => {
               🎨 Your QR code updates automatically as you customize it
             </p>
             <p className={`${isDarkMode ? 'text-green-400' : 'text-gray-600'} text-sm mt-2`}>
-              Powered by advanced QR generation technology with beautiful iridescent effects
+              Download in multiple formats: PNG, JPEG, or SVG
             </p>
           </div>
         </div>
